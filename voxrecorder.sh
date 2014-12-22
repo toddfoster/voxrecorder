@@ -35,28 +35,69 @@ PUBLISHFORMAT="flac"
 # Use a trailing ".0" to make sure sox knows you're talking about seconds
 # On a test platform, the time specification was wonky: it appears to delay
 # for around half the specified time. Behavior seems consistent.
-SILENTTIME="18.0"
+#
+# 18000 ought to be half an hour. It seems to be around 15minutes.
+SILENTTIME="18000.0"
 
 # How long must a recording be to be viable?
 # Format: whole number of seconds
 VIABLETIME="60"
 
+# How much space (Kb) to leave free on disk serving the completed files?
+FREESPACE="10240"
+CHECKFREESPACE="YES" #YES will erase files when disk gets full
 
 # SOX Settings
-
 SOXSOURCE="--default-device"
 SOXPARAMS="--no-show-progress"
-THRESHOLD="3.0%"
+THRESHOLD="1.0%"
 SOXSILENCE="silence 1 0.50 $THRESHOLD 1 $SILENTTIME $THRESHOLD"
 
 # ------------------------------------------------------
 # Ideally, nothing below here should need to be modified
 # ------------------------------------------------------
 
+function checkFreeSpace(){
+	if [ "$CHECKFREESPACE" != "YES" ]
+	then
+		return
+	fi
+
+	# Check free space, rm oldest files if below minimum
+	currentFreeSpace=`df $PUBLISHDIR | tail -1 | awk '{print $4}'`
+	while [ "$currentFreeSpace" -lt "$FREESPACE" ]
+	do
+		culprit=`ls -1rt $PUBLISHDIR/$PUBLISHNAME*.$PUBLISHFORMAT 2>/dev/null | head -1`
+		if [ -n "$culprit" ]
+		then
+			echo "$0: WARNING: Removing $culprit to free up space (free=$currentFreeSpace)"
+			rm -f "$culprit"
+		else
+			# Ooops... no files to remove
+			echo "$0: WARNING: Free space is $currentFreeSpace but there are no files to clean up! Quitting."
+			exit 0
+		fi
+		currentFreeSpace=`df $PUBLISHDIR | tail -1 | awk '{print $4}'`
+	done
+}
 
 SOX=`which sox`
 SOXI=`which soxi`
 #TODO: abort if missing binaries
+
+if [ -z "$SOX" ]
+then
+	echo "$0: ERROR: Missing sox binary in path. Quitting."
+	exit
+fi
+
+if [ -z "$SOXI" ]
+then
+	echo "$0: ERROR: Missing soxi binary in path. Quitting."
+	exit
+fi
+
+
 
 # Create missing directories
 mkdir -p $WIPDIR
@@ -64,6 +105,11 @@ mkdir -p $PUBLISHDIR
 
 # Clear old recordings
 rm -f $WIPDIR/$WIPNAME*.$PUBLISHFORMAT
+
+# Init log
+currentFreeSpace=`df $PUBLISHDIR | tail -1 | awk '{print $4}'`
+checkFreeSpace
+echo "$0: INFO: Beginning run with $currentFreeSpace available on disk."
 
 # Start recording
 $SOX $SOXSOURCE $WIPDIR/$WIPNAME.$PUBLISHFORMAT \
@@ -73,8 +119,6 @@ $SOX $SOXSOURCE $WIPDIR/$WIPNAME.$PUBLISHFORMAT \
 while [ 1 ]
 do
 	sleep 2s
-
-	#TODO: Check free space, rm oldest files if below minimum
 
 	# Sort files in reverse by time; skip first (which is the active file)
 	firstpass=""
@@ -97,9 +141,12 @@ do
 			else
 				newname="$PUBLISHNAME-$begintime.$PUBLISHFORMAT"
 				mv $i $PUBLISHDIR/$newname
-				echo "Created recording $newname ($length seconds)"
+				currentFreeSpace=`df $PUBLISHDIR | tail -1 | awk '{print $4}'`
+				echo "Created recording $newname ($length seconds; free space = $currentFreeSpace)"
+				checkFreeSpace
 			fi
 		fi
 	done
+
 done
 
